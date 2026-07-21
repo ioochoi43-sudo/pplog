@@ -248,7 +248,7 @@ function entryHTML(l){
         ${l.dur?`<span class="tag dur">⏱ ${fmtDur(l.dur)}</span>`:''}
       </div>
       ${l.note?`<div class="entry-note">${esc(l.note)}</div>`:''}
-      <div class="entry-actions"><button onclick="delLog('${l.id}')">삭제</button></div>
+      <div class="entry-actions"><button onclick="editLog('${l.id}')">수정</button><button onclick="delLog('${l.id}')">삭제</button></div>
     </div>
   </div>`;
 }
@@ -260,7 +260,7 @@ function renderToday(){
   $('#header').innerHTML = `
     <div class="date-line">${d.getFullYear()}. ${pad(d.getMonth()+1)}. ${pad(d.getDate())} <span class="dot"></span></div>
     <h1 class="page-title">Today<span class="thin"> · pplog</span></h1>
-    <div class="greeting">오늘 <b>${list.length}회</b> 기록했어요${streak()>1?` · 🔥 ${streak()}일 연속`:''}</div>`;
+    <div class="greeting">오늘 <b>${list.length}회</b> 기록했어요${streak()>1?` · 🔥 ${streak()}일 연속`:''}${timer.running?' · <b style="color:var(--brown)">⏱ 타이머 진행 중</b>':''}</div>`;
   $('#main').innerHTML = `
     <div class="sheet">
       ${list.length
@@ -304,15 +304,25 @@ function btns(){
   return `<button class="btn btn-brown" onclick="startT()">시작</button>`;
 }
 function tick(){
+  document.title = timer.running ? `⏱ ${tstr()} · pplog` : 'pplog — 배변 기록';
   if(view!=='timer') return;
   const n=$('#tnum'), h=$('#thint');
   if(n) n.textContent = tstr();
   if(h) h.innerHTML = hint();
 }
-function startT(){ timer.running=true; timer.start=Date.now(); saveT(); if(!timer.iv) timer.iv=setInterval(tick,500); renderTimer(); }
-function pauseT(){ timer.elapsed=elapsed(); timer.running=false; saveT(); renderTimer(); }
-function stopT(){ const s=Math.round(elapsed()/1000); resetT(false); openForm(s||null); }
-function resetT(re=true){ timer.running=false; timer.elapsed=0; saveT(); clearInterval(timer.iv); timer.iv=null; if(re) renderTimer(); }
+function startT(){ timer.running=true; timer.start=Date.now(); saveT(); if(!timer.iv) timer.iv=setInterval(tick,500); renderTimer(); tick(); }
+function pauseT(){ timer.elapsed=elapsed(); timer.running=false; saveT(); renderTimer(); tick(); }
+function stopT(){ pauseT(); openForm(Math.round(timer.elapsed/1000)||null); } // 저장 전까지 시간 보존 — 취소해도 안 사라짐
+function resetT(re=true){ timer.running=false; timer.elapsed=0; saveT(); clearInterval(timer.iv); timer.iv=null; if(re) renderTimer(); tick(); }
+/* 백그라운드/절전에서 돌아오면 즉시 시간 재계산 (시작 시각 기준이라 오차 없음) */
+function resumeSync(){
+  if(timer.running && !timer.iv) timer.iv=setInterval(tick,500);
+  tick();
+  if(view==='timer' && !$('#overlay').classList.contains('show')) renderTimer();
+}
+document.addEventListener('visibilitychange', ()=>{ if(!document.hidden) resumeSync(); });
+window.addEventListener('pageshow', resumeSync);
+window.addEventListener('focus', resumeSync);
 
 /* ---------- calendar ---------- */
 function renderCal(){
@@ -427,25 +437,30 @@ function importJSON(inp){
 }
 function wipe(){ if(confirm('모든 기록을 삭제할까요? 되돌릴 수 없어요.')){ logs=[]; save(); toast('삭제 완료'); render(); } }
 
-/* ---------- add form ---------- */
-const form = { amount:'중', shape:'4', feel:'없음', pain:'없음' };
-function openForm(dur=null){
-  const d = new Date(); d.setMinutes(d.getMinutes()-d.getTimezoneOffset());
-  Object.assign(form,{amount:'중',shape:'4',feel:'없음',pain:'없음'});
+/* ---------- add / edit form ---------- */
+const form = { amount:'중', shape:'4', feel:'없음', pain:'없음', editId:null, fromTimer:false };
+function openForm(dur=null, editId=null){
+  const ed = editId ? logs.find(l=>l.id===editId) : null;
+  form.editId = ed ? editId : null;
+  form.fromTimer = !ed && dur!=null;
+  Object.assign(form,{ amount:ed?.amount||'중', shape:ed?.shape||'4', feel:ed?.feel||'없음', pain:ed?.pain||'없음' });
+  const d = ed ? new Date(ed.ts) : new Date();
+  d.setMinutes(d.getMinutes()-d.getTimezoneOffset());
+  const durVal = ed ? ed.dur : dur;
   $('#modal').innerHTML = `
     <div class="grabber"></div>
-    <h2>배변 기록</h2>
-    <div class="sub">${dur?`타이머 측정: <b>${fmtDur(dur)}</b>`:'해당하는 항목을 골라주세요.'}</div>
+    <h2>${ed?'기록 수정':'배변 기록'}</h2>
+    <div class="sub">${form.fromTimer?`타이머 측정: <b>${fmtDur(dur)}</b>`:'해당하는 항목을 골라주세요.'}</div>
     <div class="field"><label>시간</label><input type="datetime-local" id="f-ts" value="${d.toISOString().slice(0,16)}"></div>
     <div class="field"><label>양</label><div class="chips" id="c-amount">${AMOUNT.map(v=>chip('amount',v,v)).join('')}</div></div>
     <div class="field"><label>형태 (브리스톨 척도)</label><div class="chips" id="c-shape">${SHAPES.map(([k,t])=>chip('shape',k,t)).join('')}</div></div>
     <div class="field"><label>잔변감</label><div class="chips" id="c-feel">${FEEL.map(v=>chip('feel',v,v)).join('')}</div></div>
     <div class="field"><label>통증 / 출혈</label><div class="chips" id="c-pain">${PAIN.map(v=>chip('pain',v,v)).join('')}</div></div>
-    <div class="field"><label>소요시간 (분)</label><input type="number" id="f-dur" min="0" step="0.5" placeholder="선택 입력 (예: 5 또는 7.5)" value="${dur?Math.round(dur/60*10)/10:''}"></div>
-    <div class="field"><label>메모</label><textarea id="f-note" placeholder="식사, 컨디션, 특이사항 등"></textarea></div>
+    <div class="field"><label>소요시간 (분)</label><input type="number" id="f-dur" min="0" step="0.5" placeholder="선택 입력 (예: 5 또는 7.5)" value="${durVal?Math.round(durVal/60*10)/10:''}"></div>
+    <div class="field"><label>메모</label><textarea id="f-note" placeholder="식사, 컨디션, 특이사항 등">${ed?esc(ed.note||''):''}</textarea></div>
     <div class="modal-actions">
       <button class="btn btn-ghost" onclick="closeForm()">취소</button>
-      <button class="btn btn-dark" onclick="submitForm()">저장</button>
+      <button class="btn btn-dark" onclick="submitForm()">${ed?'수정 저장':'저장'}</button>
     </div>`;
   $('#overlay').classList.add('show');
 }
@@ -460,10 +475,19 @@ function submitForm(){
   if(!ts){ toast('시간을 확인해주세요'); return; }
   const mins = parseFloat($('#f-dur').value);
   const dur = mins>0 ? Math.round(mins*60) : null;
-  logs.push({ id: Date.now().toString(36)+Math.random().toString(36).slice(2,6),
-    ts, amount:form.amount, shape:form.shape, feel:form.feel, pain:form.pain, dur, note:$('#f-note').value.trim() });
-  save(); closeForm(); toast('기록 완료 💩'); view='today'; render();
+  const data = { ts, amount:form.amount, shape:form.shape, feel:form.feel, pain:form.pain, dur, note:$('#f-note').value.trim() };
+  if(form.editId){
+    const l = logs.find(x=>x.id===form.editId);
+    if(l) Object.assign(l, data);
+    toast('수정 완료');
+  }else{
+    logs.push(Object.assign({ id: Date.now().toString(36)+Math.random().toString(36).slice(2,6) }, data));
+    if(form.fromTimer) resetT(false);   // 저장이 끝난 뒤에만 타이머를 비움
+    toast('기록 완료 💩');
+  }
+  save(); closeForm(); view='today'; render();
 }
+function editLog(id){ openForm(null, id); }
 function delLog(id){ if(confirm('이 기록을 삭제할까요?')){ logs = logs.filter(l=>l.id!==id); save(); render(); } }
 
 /* ---------- nav & init ---------- */
